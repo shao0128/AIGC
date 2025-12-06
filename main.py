@@ -491,48 +491,54 @@ class FileToMindmapApp:
             
             # 等待页面加载和登录
             time.sleep(5)
-            self.log(" 请在5秒内完成登录...")
-            for i in range(5, 0, -1):
+            self.log(" 请在1秒内完成登录...")
+            for i in range(1, 0, -1):
                 self.log(f" 等待登录剩余时间: {i}秒")
                 time.sleep(1)
             self.log(" 登录等待结束，开始执行上传操作")
             time.sleep(3)
-            
-            # 第一步：点击新建/上传按钮
+
+                    # 第一步：点击第一个XPath
+            self.log("正在查找第一个元素...")
             xpath1 = "/html/body/div[1]/div/div/div/div[4]/div/section[2]/div/button[3]"
+                
             try:
-                element1 = driver.find_element(By.XPATH, xpath1)
-                if element1 and element1.is_displayed() and element1.is_enabled():
-                    self.log(f" 找到上传按钮: {xpath1}")
-                    element1.click()
-                    self.log(" 成功点击上传按钮")
-                    time.sleep(2)
-                else:
-                    raise NoSuchElementException("上传按钮不可点击")
+                    element1 = driver.find_element(By.XPATH, xpath1)
+                    if element1 and element1.is_displayed() and element1.is_enabled():
+                        self.log(f"找到第一个元素: {xpath1}")
+                        element1.click()
+                        self.log("成功点击第一个元素")
+                        time.sleep(2)
+                    else:
+                        self.log("第一个元素不可点击，尝试其他选择器")
+                        raise NoSuchElementException("第一个元素不可点击")
             except (NoSuchElementException, Exception) as e:
-                self.log(f" 找不到上传按钮: {str(e)}")
-                self.root.after(0, lambda: messagebox.showwarning("操作失败", 
-                    f"无法找到上传按钮，请手动操作。\n文件保存路径: {file_path}"))
-                return
+                    self.log(f"使用第一个XPath失败: {str(e)}")
+                    self.root.after(0, lambda: messagebox.showwarning("操作失败", 
+                        f"无法找到第一个元素，请手动操作。\n文件已保存到: {file_path}"))
+                    return
+                
+                # 第二步：
+            self.log("正在查找第二个元素(textarea)...")
+            time.sleep(2)
             
-            # 第二步：激活文件输入区域（自动输入md文件）
-            xpath2 = "/html/body/div[17]/div/div/div[1]/div/div[2]/div[2]/div[2]/div/div"
+            xpath2 = "/html/body/div[19]/div/div/div[1]/div/div[2]/div[2]/div[2]/div/div"
+            
             try:
-                element2 = driver.find_element(By.XPATH, xpath2)
-                if element2 and element2.is_displayed() and element2.is_enabled():
-                    self.log(f" 找到文件输入区域: {xpath2}")
-                    element2.click()
-                    self.log(" 成功激活输入区域，准备上传文件")
-                    time.sleep(2)
-                    
-                    
-                else:
-                    raise NoSuchElementException("输入区域不可点击")
+                    element2 = driver.find_element(By.XPATH, xpath2)
+                    if element2 and element2.is_displayed() and element2.is_enabled():
+                        self.log(f"找到第二个元素: {xpath2}")
+                        element2.click()
+                        self.log("成功点击第二个元素")
+                        time.sleep(2)
+                    else:
+                        self.log("第二个元素不可点击，尝试其他选择器")
+                        raise NoSuchElementException("第二个元素不可点击")
             except (NoSuchElementException, Exception) as e:
-                self.log(f" 激活输入区域失败: {str(e)}")
-                self.root.after(0, lambda: messagebox.showwarning("操作失败", 
-                    f"无法激活文件输入区域，请手动操作。\n文件保存路径: {file_path}"))
-                return
+                    self.log(f"使用第二个XPath失败: {str(e)}")
+                    self.root.after(0, lambda: messagebox.showwarning("操作失败", 
+                        f"无法找到第二个元素，请手动操作。\n文件已保存到: {file_path}"))
+                    return
                 
         except FileNotFoundError as e:
             self.log(f" ChromeDriver未找到: {str(e)}")
@@ -1028,6 +1034,7 @@ class FileToMindmapApp:
         self.question_var.set(question)
         self.ask_question()
 
+
     def clear_conversation(self):
         """清空对话历史"""
         self.chat_history_text.delete(1.0, tk.END)
@@ -1040,6 +1047,7 @@ class FileToMindmapApp:
             messagebox.showwarning("警告", "没有可保存的内容")
             return
         
+
         # 生成默认文件名
         output_type = self.output_type_var.get()
         if self.current_file_path:
@@ -1048,6 +1056,7 @@ class FileToMindmapApp:
         else:
             default_name = f"{output_type}大纲.md"
             
+
         # 保存文件对话框
         filepath = filedialog.asksaveasfilename(
             defaultextension=".md",
@@ -1104,7 +1113,8 @@ if __name__ == "__main__":
         print("请使用以下命令安装:")
         print(f"pip install {' '.join(missing_libs)}")
         sys.exit(1)
-        
+
+
     # 检查API密钥（提示用户设置）
     if not os.getenv("DEEPSEEK_API_KEY") and not os.getenv("KIMI_API_KEY"):
         print(" 警告: 未设置 DEEPSEEK_API_KEY 或 KIMI_API_KEY 环境变量")
