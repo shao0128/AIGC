@@ -1,0 +1,17 @@
+安装必要的库
+pip install openai requests
+pip install openai
+pip install python-docx PyPDF2
+# 文档支持
+pip install python-docx PyPDF2
+# 自动上传功能
+pip install selenium
+# 剪贴板功能
+pip install pyperclip
+在系统变量中设置
+变量名：DEEPSEEK_API_KEY
+值 ：deep seek的api密钥
+变量名：KIMI_API_KEY
+值 ：api密钥
+
+记得要有驱动器
