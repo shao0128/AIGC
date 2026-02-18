@@ -37,7 +37,7 @@ class FileToMindmapApp:
         if not self.selenium_available:
             self.log("  警告: 未安装selenium库，自动上传功能将受限")
 
-    def check_selenium(self):
+    def check_selenium(self) -> bool:
         """检查selenium及相关组件是否可用（控制浏览器自动上传）"""
         try:
             import selenium
@@ -47,7 +47,7 @@ class FileToMindmapApp:
         except ImportError:
             return False
 
-    def check_pyperclip(self):
+    def check_pyperclip(self) -> bool:
         """检查pyperclip是否可用（复制内容到剪贴板）"""
         try:
             import pyperclip
@@ -62,11 +62,15 @@ class FileToMindmapApp:
         deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
         if deepseek_api_key:
             try:
-                self.deepseek_client = OpenAI(
-                    api_key=deepseek_api_key,
-                    base_url="https://api.deepseek.com"
-                )
-                self.log(" DeepSeek客户端初始化成功")
+                # 验证API密钥格式
+                if not self._validate_api_key(deepseek_api_key, "DeepSeek"):
+                    self.log("  DeepSeek API密钥格式无效")
+                else:
+                    self.deepseek_client = OpenAI(
+                        api_key=deepseek_api_key,
+                        base_url="https://api.deepseek.com"
+                    )
+                    self.log(" DeepSeek客户端初始化成功")
             except Exception as e:
                 self.log(f" 初始化DeepSeek客户端失败: {str(e)}")
         else:
@@ -75,10 +79,30 @@ class FileToMindmapApp:
         # Kimi API配置
         self.kimi_api_key = os.getenv("KIMI_API_KEY")
         self.kimi_api_url = "https://api.moonshot.cn/v1/chat/completions"
-        self.log(" Kimi API密钥已设置" if self.kimi_api_key else "  警告: 未设置KIMI_API_KEY环境变量")
+        if self.kimi_api_key:
+            if not self._validate_api_key(self.kimi_api_key, "Kimi"):
+                self.log("  Kimi API密钥格式无效")
+            else:
+                self.log(" Kimi API密钥已设置")
+        else:
+            self.log("  警告: 未设置KIMI_API_KEY环境变量")
         
         # 检查API密钥状态
         self.check_api_status()
+    
+    def _validate_api_key(self, api_key, provider):
+        """验证API密钥格式"""
+        if not api_key or not isinstance(api_key, str):
+            return False
+        
+        # 不同提供商的API密钥格式验证
+        if provider == "DeepSeek":
+            # DeepSeek API密钥通常以sk-开头
+            return api_key.startswith("sk-") and len(api_key) > 20
+        elif provider == "Kimi":
+            # Kimi API密钥通常以sk-开头
+            return api_key.startswith("sk-") and len(api_key) > 20
+        return False
 
     def check_api_status(self):
         """检查两个AI模型的API可用性"""
@@ -255,40 +279,45 @@ class FileToMindmapApp:
             messagebox.showwarning("警告", "请先生成PPT大纲内容！")
             return
             
-        try:
-            # 生成临时md文件
-            temp_dir = tempfile.gettempdir()
-            temp_file = os.path.join(temp_dir, "ppt_outline.md")
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                f.write(self.generated_markdown)
-            self.log(f" 已将PPT大纲保存到临时文件: {temp_file}")
-            
-            # Selenium不可用时使用备用方案
-            if not self.selenium_available:
-                self.log("  Selenium不可用，使用备用方案")
-                self.fallback_ppt_generation(temp_file)
-                return
-            
-            # 新线程执行上传（避免阻塞UI）
-            self.log(" 正在启动浏览器上传文件...")
-            upload_thread = threading.Thread(target=self.upload_to_kimi_slides, args=(temp_file,))
-            upload_thread.daemon = True
-            upload_thread.start()
-            
-        except Exception as e:
-            self.log(f" 打开Kimi PPT生成工具失败: {str(e)}")
-            messagebox.showerror("打开失败", f"无法自动上传文件:\n{str(e)}")
+        # 显示加载状态
+        self.log(" 正在准备上传文件...")
+        
+        # 新线程执行上传（避免阻塞UI）
+        def upload_task():
+            try:
+                # 生成临时md文件
+                temp_dir = tempfile.gettempdir()
+                temp_file = os.path.join(temp_dir, "ppt_outline.md")
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    f.write(self.generated_markdown)
+                self.log(f" 已将PPT大纲保存到临时文件: {temp_file}")
+                
+                # Selenium不可用时使用备用方案
+                if not self.selenium_available:
+                    self.log("  Selenium不可用，使用备用方案")
+                    self.fallback_ppt_generation(temp_file)
+                    return
+                
+                # 执行上传
+                self.log(" 正在启动浏览器上传文件...")
+                self.upload_to_kimi_slides(temp_file)
+                
+            except Exception as e:
+                error_msg = f" 打开Kimi PPT生成工具失败: {str(e)}"
+                self.log(error_msg)
+                self.root.after(0, lambda: messagebox.showerror("打开失败", f"无法自动上传文件:\n{str(e)}"))
+        
+        # 启动上传线程
+        upload_thread = threading.Thread(target=upload_task)
+        upload_thread.daemon = True
+        upload_thread.start()
 
-    def upload_to_kimi_slides(self, file_path):
-        """使用Selenium自动上传md文件到Kimi Slides"""
+    def _get_chrome_driver(self):
+        """获取Chrome浏览器驱动"""
         try:
             from selenium import webdriver
             from selenium.webdriver.chrome.service import Service
             from selenium.webdriver.chrome.options import Options
-            from selenium.webdriver.common.by import By
-            from selenium.webdriver.support.ui import WebDriverWait
-            from selenium.webdriver.support import expected_conditions as EC
-            from selenium.common.exceptions import TimeoutException, NoSuchElementException
             import time
             
             # Chrome浏览器配置
@@ -297,22 +326,139 @@ class FileToMindmapApp:
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--start-maximized')
+            chrome_options.add_argument('--ignore-certificate-errors')
+            chrome_options.add_argument('--disable-extensions')
             chrome_options.add_argument(f"--user-data-dir={os.path.join(tempfile.gettempdir(), 'xmind_chrome_profile')}")
             
             # 查找chromedriver.exe
-            chromedriver_path = "chromedriver.exe"
-            if not os.path.exists(chromedriver_path):
-                project_dir = os.path.dirname(os.path.abspath(__file__))
-                chromedriver_path = os.path.join(project_dir, "chromedriver.exe")
-                
-            if not os.path.exists(chromedriver_path):
-                raise FileNotFoundError(f" 未找到chromedriver.exe，请确保它在项目目录中")
+            chromedriver_paths = [
+                "chromedriver.exe",
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "chromedriver.exe"),
+                os.path.join(os.environ.get("PATH", ""), "chromedriver.exe")
+            ]
+            
+            chromedriver_path = None
+            for path in chromedriver_paths:
+                if os.path.exists(path):
+                    chromedriver_path = path
+                    break
+            
+            if not chromedriver_path:
+                raise FileNotFoundError(" 未找到chromedriver.exe，请确保它在项目目录或系统PATH中")
             
             self.log(f"  使用chromedriver: {chromedriver_path}")
             
-            # 启动Chrome并打开Kimi Slides
-            service = Service(executable_path=chromedriver_path)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
+            # 启动Chrome
+            try:
+                service = Service(executable_path=chromedriver_path)
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                # 设置隐式等待
+                driver.implicitly_wait(5)
+                return driver
+            except Exception as e:
+                raise Exception(f"启动Chrome失败: {str(e)}")
+        except Exception as e:
+            raise Exception(f"获取Chrome驱动失败: {str(e)}")
+    
+    def _find_upload_element(self, driver):
+        """查找上传元素"""
+        from selenium.webdriver.common.by import By
+        from selenium.common.exceptions import NoSuchElementException, TimeoutException
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        import time
+        
+        # 尝试多种方式查找上传元素
+        upload_element = None
+        
+        # 等待页面加载完成
+        try:
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        except TimeoutException:
+            self.log(" 页面加载超时，尝试直接查找元素")
+        
+        # 尝试方法1: 使用指定XPath
+        try:
+            upload_element = driver.find_element(By.XPATH, "/html/body/div[1]/div/div/div[2]/div/div/div[2]/div/div[2]/div[2]/div[2]/label/svg")
+            if upload_element and upload_element.is_displayed():
+                self.log(" 使用指定XPath找到上传元素")
+                return upload_element
+        except NoSuchElementException:
+            self.log(" 指定XPath未找到上传元素，尝试其他方法")
+        except Exception as e:
+            self.log(f" 使用XPath查找失败: {str(e)}")
+        
+        # 尝试方法2: 使用多种CSS选择器
+        selectors = [
+            "input[type='file']", 
+            "[class*='upload']", 
+            "[data-testid*='upload']",
+            "button:contains('上传')", 
+            "label:contains('上传')",
+            "button", 
+            "label", 
+            "svg"
+        ]
+        
+        for selector in selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                self.log(f" 使用选择器 '{selector}' 找到 {len(elements)} 个元素")
+                for i, element in enumerate(elements):
+                    try:
+                        if element.is_displayed() and element.is_enabled():
+                            # 尝试获取元素文本或属性，判断是否为上传按钮
+                            try:
+                                text = element.text.lower()
+                                if "上传" in text or "upload" in text:
+                                    upload_element = element
+                                    self.log(f" 使用CSS选择器找到上传元素: {selector} (元素 {i+1})")
+                                    return upload_element
+                            except:
+                                pass
+                            
+                            # 对于input[type='file']，直接返回
+                            if selector == "input[type='file']":
+                                upload_element = element
+                                self.log(f" 找到文件输入元素: {selector}")
+                                return upload_element
+                    except Exception as e:
+                        self.log(f" 检查元素 {i+1} 时出错: {str(e)}")
+                        continue
+            except Exception as e:
+                self.log(f" 使用选择器 '{selector}' 查找时出错: {str(e)}")
+                continue
+        
+        # 尝试方法3: 查找所有可点击元素，检查是否包含上传相关文本
+        try:
+            all_buttons = driver.find_elements(By.TAG_NAME, "button")
+            for button in all_buttons:
+                try:
+                    if button.is_displayed() and button.is_enabled():
+                        text = button.text.lower()
+                        if "上传" in text or "upload" in text:
+                            upload_element = button
+                            self.log(" 通过按钮文本找到上传元素")
+                            return upload_element
+                except:
+                    continue
+        except Exception as e:
+            self.log(f" 查找所有按钮时出错: {str(e)}")
+        
+        self.log(" 未找到上传元素")
+        return None
+    
+    def upload_to_kimi_slides(self, file_path):
+        """使用Selenium自动上传md文件到Kimi Slides"""
+        try:
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            from selenium.common.exceptions import TimeoutException, NoSuchElementException
+            import time
+            
+            # 获取驱动并打开Kimi Slides
+            driver = self._get_chrome_driver()
             driver.get("https://www.kimi.com/slides")
             self.log(" 已打开Kimi Slides")
             
@@ -323,28 +469,8 @@ class FileToMindmapApp:
                 WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                 self.log(" 正在查找上传按钮...")
                 
-                # 尝试多种方式查找上传元素
-                upload_element = None
-                try:
-                    upload_element = driver.find_element(By.XPATH, "/html/body/div[1]/div/div/div[2]/div/div/div[2]/div/div[2]/div[2]/div[2]/label/svg")
-                    self.log(" 使用指定XPath找到上传元素")
-                except NoSuchElementException:
-                    selectors = [
-                        "input[type='file']", "button:contains('上传')", "label:contains('上传')",
-                        "[class*='upload']", "[data-testid*='upload']", "svg", "button", "label"
-                    ]
-                    for selector in selectors:
-                        try:
-                            elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                            for element in elements:
-                                if element.is_displayed() and element.is_enabled():
-                                    upload_element = element
-                                    self.log(f" 使用CSS选择器找到上传元素: {selector}")
-                                    break
-                        except:
-                            continue
-                        if upload_element:
-                            break
+                # 查找上传元素
+                upload_element = self._find_upload_element(driver)
                 
                 # 未找到上传元素时提示手动操作
                 if upload_element is None:
@@ -365,28 +491,7 @@ class FileToMindmapApp:
                     time.sleep(3)
                     
                     # 尝试点击生成按钮
-                    try:
-                        xpath_to_click = "/html/body/div[1]/div/div/div[2]/div/div/div[2]/div/div[2]/div[3]/div[2]/div[3]/div"
-                        element_to_click = WebDriverWait(driver, 10).until(
-                            EC.element_to_be_clickable((By.XPATH, xpath_to_click))
-                        )
-                        if element_to_click and element_to_click.is_displayed():
-                            element_to_click.click()
-                            self.log(f" 成功点击生成按钮")
-                            time.sleep(3)
-                            
-                            # 检测生成状态
-                            page_source = driver.page_source.lower()
-                            success_indicators = ["上传成功", "解析完成", "开始生成", "生成中", "processing"]
-                            for indicator in success_indicators:
-                                if indicator.lower() in page_source:
-                                    self.log(f" 检测到生成开始: {indicator}")
-                                    self.root.after(0, lambda: messagebox.showinfo("开始生成", "PPT已经开始生成，请等待处理完成。"))
-                                    break
-                        else:
-                            self.log("  生成按钮不可点击")
-                    except TimeoutException:
-                        self.log("  等待生成按钮超时")
+                    self._try_click_generate_button(driver)
                 else:
                     self.root.after(0, lambda: messagebox.showinfo("手动上传", 
                         f"已打开Kimi Slides页面。\nMarkdown文件已保存到: {file_path}\n请在网页中手动上传文件。"))
@@ -402,6 +507,37 @@ class FileToMindmapApp:
         except Exception as e:
             self.log(f" Selenium启动失败: {str(e)}")
             self.root.after(0, lambda: self.fallback_ppt_generation(file_path))
+    
+    def _try_click_generate_button(self, driver):
+        """尝试点击生成按钮"""
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.common.exceptions import TimeoutException
+        import time
+        
+        try:
+            xpath_to_click = "/html/body/div[1]/div/div/div[2]/div/div/div[2]/div/div[2]/div[3]/div[2]/div[3]/div"
+            element_to_click = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, xpath_to_click))
+            )
+            if element_to_click and element_to_click.is_displayed():
+                element_to_click.click()
+                self.log(f" 成功点击生成按钮")
+                time.sleep(3)
+                
+                # 检测生成状态
+                page_source = driver.page_source.lower()
+                success_indicators = ["上传成功", "解析完成", "开始生成", "生成中", "processing"]
+                for indicator in success_indicators:
+                    if indicator.lower() in page_source:
+                        self.log(f" 检测到生成开始: {indicator}")
+                        self.root.after(0, lambda: messagebox.showinfo("开始生成", "PPT已经开始生成，请等待处理完成。"))
+                        break
+            else:
+                self.log("  生成按钮不可点击")
+        except TimeoutException:
+            self.log("  等待生成按钮超时")
 
     def fallback_ppt_generation(self, file_path):
         """PPT生成备用方案：复制内容到剪贴板或提示手动上传"""
@@ -428,64 +564,48 @@ class FileToMindmapApp:
             messagebox.showwarning("警告", "请先生成思维导图大纲内容！")
             return
             
-        try:
-            # 生成临时md文件（带时间戳避免重名）
-            temp_dir = tempfile.gettempdir()
-            temp_file = os.path.join(temp_dir, f"mindmap_outline_{int(datetime.datetime.now().timestamp())}.md")
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                f.write(self.generated_markdown)
-            self.log(f" 已将思维导图大纲保存到临时文件: {temp_file}")
-            
-            # Selenium不可用时使用备用方案
-            if not self.selenium_available:
-                self.log("  Selenium不可用，使用备用方案")
-                self.fallback_mindmap_generation(temp_file)
-                return
-            
-            # 新线程执行上传
-            self.log(" 正在启动浏览器上传到XMind...")
-            upload_thread = threading.Thread(target=self.upload_to_xmind, args=(temp_file,))
-            upload_thread.daemon = True
-            upload_thread.start()
-            
-        except Exception as e:
-            self.log(f" 打开XMind工具失败: {str(e)}")
-            messagebox.showerror("打开失败", f"无法自动上传文件:\n{str(e)}")
+        # 显示加载状态
+        self.log(" 正在准备上传文件...")
+        
+        # 新线程执行上传（避免阻塞UI）
+        def upload_task():
+            try:
+                # 生成临时md文件（带时间戳避免重名）
+                temp_dir = tempfile.gettempdir()
+                temp_file = os.path.join(temp_dir, f"mindmap_outline_{int(datetime.datetime.now().timestamp())}.md")
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    f.write(self.generated_markdown)
+                self.log(f" 已将思维导图大纲保存到临时文件: {temp_file}")
+                
+                # Selenium不可用时使用备用方案
+                if not self.selenium_available:
+                    self.log("  Selenium不可用，使用备用方案")
+                    self.fallback_mindmap_generation(temp_file)
+                    return
+                
+                # 执行上传
+                self.log(" 正在启动浏览器上传到XMind...")
+                self.upload_to_xmind(temp_file)
+                
+            except Exception as e:
+                error_msg = f" 打开XMind工具失败: {str(e)}"
+                self.log(error_msg)
+                self.root.after(0, lambda: messagebox.showerror("打开失败", f"无法自动上传文件:\n{str(e)}"))
+        
+        # 启动上传线程
+        upload_thread = threading.Thread(target=upload_task)
+        upload_thread.daemon = True
+        upload_thread.start()
 
     def upload_to_xmind(self, file_path):
         """使用Selenium自动上传md文件到XMind在线工作台"""
         try:
-            from selenium import webdriver
-            from selenium.webdriver.chrome.service import Service
-            from selenium.webdriver.chrome.options import Options
             from selenium.webdriver.common.by import By
-            from selenium.webdriver.support.ui import WebDriverWait
-            from selenium.webdriver.support import expected_conditions as EC
-            from selenium.common.exceptions import TimeoutException, NoSuchElementException
+            from selenium.common.exceptions import NoSuchElementException
             import time
             
-            # Chrome浏览器配置
-            chrome_options = Options()
-            chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('--no-sandbox')
-            chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--start-maximized')
-            chrome_options.add_argument(f"--user-data-dir={os.path.join(tempfile.gettempdir(), 'xmind_chrome_profile')}")
-            
-            # 查找chromedriver.exe
-            chromedriver_path = "chromedriver.exe"
-            if not os.path.exists(chromedriver_path):
-                project_dir = os.path.dirname(os.path.abspath(__file__))
-                chromedriver_path = os.path.join(project_dir, "chromedriver.exe")
-                
-            if not os.path.exists(chromedriver_path):
-                raise FileNotFoundError(f" 未找到chromedriver.exe，请确保它在项目目录中")
-            
-            self.log(f"  使用chromedriver: {chromedriver_path}")
-            
-            # 启动Chrome并打开XMind工作台
-            service = Service(executable_path=chromedriver_path)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
+            # 获取驱动并打开XMind工作台
+            driver = self._get_chrome_driver()
             driver.get("https://app.xmind.cn/home/my-works")
             self.log(" 已打开XMind工作台")
             
@@ -498,47 +618,8 @@ class FileToMindmapApp:
             self.log(" 登录等待结束，开始执行上传操作")
             time.sleep(3)
 
-                    # 第一步：点击第一个XPath
-            self.log("正在查找第一个元素...")
-            xpath1 = "/html/body/div[1]/div/div/div/div[4]/div/section[2]/div/button[3]"
-                
-            try:
-                    element1 = driver.find_element(By.XPATH, xpath1)
-                    if element1 and element1.is_displayed() and element1.is_enabled():
-                        self.log(f"找到第一个元素: {xpath1}")
-                        element1.click()
-                        self.log("成功点击第一个元素")
-                        time.sleep(2)
-                    else:
-                        self.log("第一个元素不可点击，尝试其他选择器")
-                        raise NoSuchElementException("第一个元素不可点击")
-            except (NoSuchElementException, Exception) as e:
-                    self.log(f"使用第一个XPath失败: {str(e)}")
-                    self.root.after(0, lambda: messagebox.showwarning("操作失败", 
-                        f"无法找到第一个元素，请手动操作。\n文件已保存到: {file_path}"))
-                    return
-                
-                # 第二步：
-            self.log("正在查找第二个元素(textarea)...")
-            time.sleep(2)
-            
-            xpath2 = "/html/body/div[19]/div/div/div[1]/div/div[2]/div[2]/div[2]/div/div"
-            
-            try:
-                    element2 = driver.find_element(By.XPATH, xpath2)
-                    if element2 and element2.is_displayed() and element2.is_enabled():
-                        self.log(f"找到第二个元素: {xpath2}")
-                        element2.click()
-                        self.log("成功点击第二个元素")
-                        time.sleep(2)
-                    else:
-                        self.log("第二个元素不可点击，尝试其他选择器")
-                        raise NoSuchElementException("第二个元素不可点击")
-            except (NoSuchElementException, Exception) as e:
-                    self.log(f"使用第二个XPath失败: {str(e)}")
-                    self.root.after(0, lambda: messagebox.showwarning("操作失败", 
-                        f"无法找到第二个元素，请手动操作。\n文件已保存到: {file_path}"))
-                    return
+            # 执行上传操作
+            self._execute_xmind_upload_steps(driver, file_path)
                 
         except FileNotFoundError as e:
             self.log(f" ChromeDriver未找到: {str(e)}")
@@ -548,6 +629,54 @@ class FileToMindmapApp:
             import traceback
             self.log(f"详细错误信息: {traceback.format_exc()}")
             self.root.after(0, lambda: self.fallback_mindmap_generation(file_path))
+    
+    def _execute_xmind_upload_steps(self, driver, file_path):
+        """执行XMind上传步骤"""
+        from selenium.webdriver.common.by import By
+        from selenium.common.exceptions import NoSuchElementException
+        import time
+        
+        # 第一步：点击第一个XPath
+        self.log("正在查找第一个元素...")
+        xpath1 = "/html/body/div[1]/div/div/div/div[4]/div/section[2]/div/button[3]"
+            
+        try:
+                element1 = driver.find_element(By.XPATH, xpath1)
+                if element1 and element1.is_displayed() and element1.is_enabled():
+                    self.log(f"找到第一个元素: {xpath1}")
+                    element1.click()
+                    self.log("成功点击第一个元素")
+                    time.sleep(2)
+                else:
+                    self.log("第一个元素不可点击，尝试其他选择器")
+                    raise NoSuchElementException("第一个元素不可点击")
+        except (NoSuchElementException, Exception) as e:
+                self.log(f"使用第一个XPath失败: {str(e)}")
+                self.root.after(0, lambda: messagebox.showwarning("操作失败", 
+                    f"无法找到第一个元素，请手动操作。\n文件已保存到: {file_path}"))
+                return
+            
+            # 第二步：
+        self.log("正在查找第二个元素(textarea)...")
+        time.sleep(2)
+        
+        xpath2 = "/html/body/div[19]/div/div/div[1]/div/div[2]/div[2]/div[2]/div/div"
+        
+        try:
+                element2 = driver.find_element(By.XPATH, xpath2)
+                if element2 and element2.is_displayed() and element2.is_enabled():
+                    self.log(f"找到第二个元素: {xpath2}")
+                    element2.click()
+                    self.log("成功点击第二个元素")
+                    time.sleep(2)
+                else:
+                    self.log("第二个元素不可点击，尝试其他选择器")
+                    raise NoSuchElementException("第二个元素不可点击")
+        except (NoSuchElementException, Exception) as e:
+                self.log(f"使用第二个XPath失败: {str(e)}")
+                self.root.after(0, lambda: messagebox.showwarning("操作失败", 
+                    f"无法找到第二个元素，请手动操作。\n文件已保存到: {file_path}"))
+                return
 
     def fallback_mindmap_generation(self, file_path):
         """思维导图生成备用方案：复制内容到剪贴板或提示手动上传"""
@@ -689,6 +818,15 @@ class FileToMindmapApp:
         
         def confirm():
             path = entry.get().strip()
+            if not path:
+                messagebox.showerror("错误", "文件路径不能为空")
+                return
+            
+            # 验证路径安全性
+            if not self._validate_file_path(path):
+                messagebox.showerror("错误", "文件路径无效或不安全")
+                return
+            
             if os.path.isfile(path):
                 self.file_path_var.set(path)
                 self.load_and_preview_file(path)
@@ -699,6 +837,24 @@ class FileToMindmapApp:
         ttk.Button(dialog, text="确定", command=confirm).pack(pady=5)
         dialog.transient(self.root)
         dialog.grab_set()
+    
+    def _validate_file_path(self, path):
+        """验证文件路径的安全性"""
+        try:
+            # 移除路径中的特殊字符
+            if any(char in path for char in '<>"|?*'):
+                return False
+            
+            # 解析路径
+            normalized_path = os.path.normpath(path)
+            
+            # 检查路径长度
+            if len(normalized_path) > 260:  # Windows路径长度限制
+                return False
+            
+            return True
+        except:
+            return False
 
     def load_and_preview_file(self, filepath):
         """加载文件并预览内容（支持txt/md/docx/pdf格式）"""
@@ -752,7 +908,17 @@ class FileToMindmapApp:
 
     def extract_file_content(self, filepath):
         """提取不同格式文件的文本内容"""
+        # 检查文件大小
+        max_file_size = 5 * 1024 * 1024  # 5MB限制
+        if os.path.getsize(filepath) > max_file_size:
+            raise ValueError(f"文件大小超过限制（最大5MB），当前大小：{os.path.getsize(filepath) / 1024 / 1024:.2f}MB")
+        
+        # 检查文件扩展名
         ext = Path(filepath).suffix.lower()
+        supported_extensions = ['.txt', '.md', '.docx', '.pdf']
+        if ext not in supported_extensions:
+            self.log(f"警告: 非推荐文件格式 {ext}，将尝试作为纯文本读取")
+        
         content = ""
         try:
             if ext == '.txt' or ext == '.md':
@@ -770,8 +936,16 @@ class FileToMindmapApp:
                     import PyPDF2
                     with open(filepath, 'rb') as f:
                         pdf_reader = PyPDF2.PdfReader(f)
-                        for page in pdf_reader.pages:
-                            content += page.extract_text() + "\n"
+                        # 限制PDF页数
+                        max_pages = 50
+                        if len(pdf_reader.pages) > max_pages:
+                            self.log(f"警告: PDF文件超过{max_pages}页，将只处理前{max_pages}页")
+                        for i, page in enumerate(pdf_reader.pages):
+                            if i >= max_pages:
+                                break
+                            page_text = page.extract_text()
+                            if page_text:
+                                content += page_text + "\n"
                 except ImportError:
                     raise ImportError("请安装 PyPDF2 库以支持 .pdf 文件（命令：pip install PyPDF2）")
             else:
@@ -782,10 +956,90 @@ class FileToMindmapApp:
             # 编码错误时尝试GBK编码
             with open(filepath, 'r', encoding='gbk', errors='ignore') as f:
                 content = f.read()
+        except Exception as e:
+            raise Exception(f"读取文件时出错: {str(e)}")
+        
+        # 检查内容是否为空
         if not content.strip():
             raise ValueError("文件内容为空或无法提取文本")
+        
+        # 限制内容长度
+        max_content_length = 100000  # 100,000字符
+        if len(content) > max_content_length:
+            self.log(f"警告: 文件内容超过{max_content_length}字符，将只使用前{max_content_length}字符")
+            content = content[:max_content_length]
+        
         return content.strip()
 
+    def _call_ai_api(self, ai_model: str, messages: list, max_tokens: int = 2000, temperature: float = 0.7) -> str:
+        """统一调用AI API的方法，包含重试机制
+        
+        Args:
+            ai_model: AI模型名称，支持 "DeepSeek" 和 "Kimi"
+            messages: 消息列表，格式为 [{"role": "system/user", "content": "消息内容"}]
+            max_tokens: 最大 token 数
+            temperature: 生成温度
+            
+        Returns:
+            str: AI 生成的内容
+            
+        Raises:
+            Exception: API调用失败时抛出异常
+        """
+        import time
+        max_retries = 2
+        retry_delay = 2
+        
+        for attempt in range(max_retries + 1):
+            try:
+                if ai_model == "DeepSeek":
+                    # 调用DeepSeek API
+                    response = self.deepseek_client.chat.completions.create(
+                        model="deepseek-chat",
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+                    return response.choices[0].message.content
+                else:  # Kimi
+                    # 调用Kimi API
+                    headers = {
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.kimi_api_key}"
+                    }
+                    data = {
+                        "model": "moonshot-v1-8k",
+                        "messages": messages,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                        "stream": False
+                    }
+                    response = requests.post(self.kimi_api_url, headers=headers, json=data, timeout=60)
+                    response.raise_for_status()
+                    result = response.json()
+                    return result["choices"][0]["message"]["content"]
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries:
+                    self.log(f"{ai_model} API调用超时，{retry_delay}秒后重试 ({attempt + 1}/{max_retries})...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+                else:
+                    raise
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries and "50" in str(e):  # 只重试服务器错误
+                    self.log(f"{ai_model} API请求失败，{retry_delay}秒后重试 ({attempt + 1}/{max_retries})...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+                else:
+                    raise
+            except Exception as e:
+                if attempt < max_retries:
+                    self.log(f"{ai_model}调用失败，{retry_delay}秒后重试 ({attempt + 1}/{max_retries})...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+                else:
+                    raise
+    
     def generate_content(self):
         """调用AI生成思维导图/PPT大纲（核心生成功能）"""
         if not self.current_file_content:
@@ -863,39 +1117,14 @@ class FileToMindmapApp:
         self.root.update()
         
         try:
-            ai_output = ""
-            if ai_model == "DeepSeek":
-                # 调用DeepSeek API
-                response = self.deepseek_client.chat.completions.create(
-                    model="deepseek-chat",
-                    messages=[
-                        {"role": "system", "content": f"你是一个专业的{output_type}设计师，擅长将复杂信息转化为清晰的结构化大纲。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=2000,
-                    temperature=0.7
-                )
-                ai_output = response.choices[0].message.content
-            else:  # Kimi
-                # 调用Kimi API
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.kimi_api_key}"
-                }
-                data = {
-                    "model": "moonshot-v1-8k",
-                    "messages": [
-                        {"role": "system", "content": f"你是一个专业的{output_type}设计师，擅长将复杂信息转化为清晰的结构化大纲。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "max_tokens": 2000,
-                    "temperature": 0.7,
-                    "stream": False
-                }
-                response = requests.post(self.kimi_api_url, headers=headers, json=data, timeout=60)
-                response.raise_for_status()
-                result = response.json()
-                ai_output = result["choices"][0]["message"]["content"]
+            # 构建消息
+            messages = [
+                {"role": "system", "content": f"你是一个专业的{output_type}设计师，擅长将复杂信息转化为清晰的结构化大纲。"},
+                {"role": "user", "content": prompt}
+            ]
+            
+            # 调用API
+            ai_output = self._call_ai_api(ai_model, messages)
             
             # 处理生成结果
             self.generated_markdown = ai_output.strip()
@@ -959,39 +1188,14 @@ class FileToMindmapApp:
 用户问题: {question}
 请提供准确、简洁的回答，并尽可能引用文件中的具体内容。"""
             
-            answer = ""
-            if ai_model == "DeepSeek":
-                # 调用DeepSeek API
-                response = self.deepseek_client.chat.completions.create(
-                    model="deepseek-chat",
-                    messages=[
-                        {"role": "system", "content": "你是一个专业的文档分析师，擅长基于文档内容回答用户问题。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000,
-                    temperature=0.7
-                )
-                answer = response.choices[0].message.content.strip()
-            else:  # Kimi
-                # 调用Kimi API
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.kimi_api_key}"
-                }
-                data = {
-                    "model": "moonshot-v1-8k",
-                    "messages": [
-                        {"role": "system", "content": "你是一个专业的文档分析师，擅长基于文档内容回答用户问题。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "max_tokens": 1000,
-                    "temperature": 0.7,
-                    "stream": False
-                }
-                response = requests.post(self.kimi_api_url, headers=headers, json=data, timeout=60)
-                response.raise_for_status()
-                result = response.json()
-                answer = result["choices"][0]["message"]["content"].strip()
+            # 构建消息
+            messages = [
+                {"role": "system", "content": "你是一个专业的文档分析师，擅长基于文档内容回答用户问题。"},
+                {"role": "user", "content": prompt}
+            ]
+            
+            # 调用API
+            answer = self._call_ai_api(ai_model, messages, max_tokens=1000).strip()
             
             # 主线程更新UI显示回答
             self.root.after(0, self.display_answer, answer, ai_model)
